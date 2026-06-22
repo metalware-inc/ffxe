@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Dump indirect-call (BLX <Rm>) instructions from the FFXE dataset to a CSV."""
+"""Dump indirect call/branch (BLX <Rm>, BX <Rm>) instructions from the FFXE dataset to a CSV."""
 import os
 import csv
 import glob
@@ -50,15 +50,18 @@ def load(path, base, vtbases):
     return bv
 
 
-def blx_sites(bv):
+def call_sites(bv):
     sites = set()
     for func in bv.functions:
         for tokens, addr in func.instructions:
             disasm = " ".join("".join(t.text for t in tokens).split())
-            if not disasm.lower().startswith("blx "):
+            if not disasm.lower().startswith(("bx ", "blx ")):
                 continue
             hw = int.from_bytes(bv.read(addr, 2), "little")
-            if (hw & 0xFF87) == 0x4780:  # Thumb BLX <Rm> encoding
+            rm = (hw >> 3) & 0xf
+            is_blx = (hw & 0xFF87) == 0x4780              # BLX <Rm>: indirect call
+            is_bx = (hw & 0xFF87) == 0x4700 and rm != 14  # BX <Rm>: indirect branch (bx lr is a return)
+            if is_blx or is_bx:
                 sites.add((addr, disasm))
     return sorted(sites)
 
@@ -69,11 +72,11 @@ def main():
         w.writerow(["firmware", "pc", "disasm", "targets"])
         for name, path, base, vtbases in discover():
             bv = load(path, base, vtbases)
-            sites = blx_sites(bv)
+            sites = call_sites(bv)
             for pc, disasm in sites:
                 w.writerow([name, hex(pc), disasm, ""])
             bv.file.close()
-            print(f"  {name:<28} {len(sites):>4} blx")
+            print(f"  {name:<28} {len(sites):>4} sites")
     print(f"wrote {OUT}")
 
 
